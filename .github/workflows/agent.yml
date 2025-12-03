@@ -1,0 +1,38 @@
+name: agent-tests
+
+on: [push, pull_request]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONHASHSEED: "0"
+      PYTHONPATH: "."
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python deps
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Build
+        run: |
+          set -euxo pipefail
+          cargo build --manifest-path gateway/Cargo.toml
+
+      - name: Test
+        run: |
+          set -euxo pipefail
+          cargo test --manifest-path gateway/Cargo.toml
+          pytest

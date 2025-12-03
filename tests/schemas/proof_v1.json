@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oord TL Proof v1",
+  "type": "object",
+  "properties": {
+    "proof_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "tl_seq": {
+      "type": "integer"
+    },
+    "merkle_root": {
+      "type": "string"
+    },
+    "sth": {
+      "type": "object",
+      "properties": {
+        "tree_size": {
+          "type": "integer"
+        },
+        "root_hash": {
+          "type": "string"
+        },
+        "timestamp_ms": {
+          "type": "integer"
+        },
+        "key_id": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tree_size",
+        "root_hash",
+        "timestamp_ms",
+        "key_id",
+        "signature"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "proof_version",
+    "tl_seq",
+    "merkle_root",
+    "sth"
+  ],
+  "additionalProperties": false
+}

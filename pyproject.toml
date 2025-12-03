@@ -1,0 +1,11 @@
+[project]
+name = "oord-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", ".venv", "_out", "gateway/_out", "build", "dist"]
