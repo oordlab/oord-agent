@@ -1,6 +1,8 @@
+# oord-agent/api/app/models/seal_manifest.py
 from __future__ import annotations
 
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Any
+import json
 
 from pydantic import BaseModel, Field
 
@@ -96,11 +98,32 @@ class SealManifest(BaseModel):
         ...,
         description="Detached signature over the canonical manifest payload",
     )
+    
+    def unsigned_dict(self) -> dict:
+        """
+        Return the manifest as a plain dict without the signature field.
 
-    tl_proof: Optional[TlProof] = Field(
-        default=None,
-        description="Optional TL anchoring proof for this seal",
-    )
+        This is the view that is canonicalized and signed.
+        """
+        data: dict = self.model_dump()
+        data.pop("signature", None)
+        return data
+
+    def unsigned_bytes(self) -> bytes:
+        """
+        Return JCS-style canonical bytes for the unsigned manifest view.
+
+        For our restricted manifest domain (strings, ints, arrays, objects,
+        no floats), json.dumps with sort_keys + tight separators matches
+        the RFC 8785 behavior we care about.
+        """
+        return json.dumps(
+            self.unsigned_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
 
 
 __all__ = [

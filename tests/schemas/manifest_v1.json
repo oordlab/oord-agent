@@ -3,21 +3,29 @@
   "title": "SealManifest v1",
   "type": "object",
   "required": [
+    "manifest_version",
     "org_id",
     "batch_id",
     "created_at_ms",
     "key_id",
+    "hash_alg",
     "merkle",
     "files",
     "signature"
   ],
   "properties": {
-    "manifest_version": { "type": "string" },
+    "manifest_version": {
+      "type": "string",
+      "description": "Opaque manifest version string, e.g. '1.0'"
+    },
     "org_id": { "type": "string" },
     "batch_id": { "type": "string" },
     "created_at_ms": { "type": "integer" },
     "key_id": { "type": "string" },
-    "hash_alg": { "type": "string" },
+    "hash_alg": {
+      "type": "string",
+      "description": "Hash algorithm used for per-file digests and Merkle leaves"
+    },
     "merkle": {
       "type": "object",
       "required": ["root_cid", "tree_alg"],
@@ -32,7 +40,11 @@
         "type": "object",
         "required": ["path", "sha256", "size_bytes"],
         "properties": {
-          "path": { "type": "string" },
+          "path": {
+            "type": "string",
+            "description": "Relative path inside the sealed bundle, must start with 'files/' and contain no '..' or '\\\\'",
+            "pattern": "^files\\/(?!.*\\.\\.)(?!.*\\\\).+"
+          },
           "sha256": { "type": "string" },
           "size_bytes": { "type": "integer" }
         }
@@ -40,7 +52,7 @@
     },
     "signature": { "type": "string" },
     "tl_proof": {
-      "$ref": "proof_v1.json"
+      "description": "DEPRECATED: TL proof lives in a separate proof.json file; this field is ignored in v1 bundles"
     }
   },
   "additionalProperties": false

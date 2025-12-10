@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from cli import oord_cli
 
 from api.app.models.seal_manifest import FileEntry, MerkleInfo, SealManifest, TlProof, TlSth
 
@@ -76,3 +77,70 @@ def test_pydantic_proof_roundtrip_example():
     dumped = proof.model_dump()
     assert dumped["proof_version"] == "1.0"
     assert dumped["sth"]["tree_size"] == 42
+
+
+def test_manifest_unsigned_view_strips_signature_and_is_stable():
+    """
+    The unsigned manifest view must:
+      - contain all core fields except 'signature'
+      - produce stable canonical bytes for signing
+    """
+    manifest = SealManifest(
+        org_id="DEMO-LABS",
+        batch_id="BATCH-2025-0001",
+        created_at_ms=1764350123456,
+        key_id="org-DEMO-LABS-ed25519-1",
+        merkle=MerkleInfo(
+            root_cid="cid:sha256:" + "a" * 64,
+        ),
+        files=[
+            FileEntry(
+                path="files/report1.pdf",
+                sha256="b" * 64,
+                size_bytes=12345,
+            )
+        ],
+        signature="dummy-signature",
+    )
+
+    unsigned = manifest.unsigned_dict()
+    assert "signature" not in unsigned
+
+    # The unsigned view still has all core fields.
+    for field in [
+        "manifest_version",
+        "org_id",
+        "batch_id",
+        "created_at_ms",
+        "key_id",
+        "hash_alg",
+        "merkle",
+        "files",
+    ]:
+        assert field in unsigned
+
+    b1 = manifest.unsigned_bytes()
+    b2 = manifest.unsigned_bytes()
+    assert b1 == b2, "unsigned_bytes must be stable across calls"
+
+
+def test_manifest_unsigned_bytes_change_when_fields_change():
+    """
+    Any mutation to a core field must change the unsigned canonical bytes.
+    """
+    base = SealManifest(
+        org_id="DEMO-LABS",
+        batch_id="BATCH-2025-0001",
+        created_at_ms=1764350123456,
+        key_id="org-DEMO-LABS-ed25519-1",
+        merkle=MerkleInfo(root_cid="cid:sha256:" + "a" * 64),
+        files=[FileEntry(path="files/report1.pdf", sha256="b" * 64, size_bytes=12345)],
+        signature="dummy-signature",
+    )
+
+    b_base = base.unsigned_bytes()
+
+    mutated = base.model_copy(update={"batch_id": "BATCH-2025-0002"})
+    b_mut = mutated.unsigned_bytes()
+
+    assert b_base != b_mut, "changing a core field must change unsigned canonical bytes"

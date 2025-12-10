@@ -4,6 +4,11 @@
 .
 ├── _ai
 │   └── agent-context-index.md
+├── agent
+│   ├── __init__.py
+│   ├── config.py
+│   ├── receiver.py
+│   └── sender.py
 ├── api
 │   ├── __init__.py
 │   └── app
@@ -11,12 +16,6 @@
 │   └── oord_cli.py
 ├── docs
 │   └── ADR-008-oord-seal-v1.md
-├── gateway
-│   ├── _data
-│   ├── _out
-│   ├── Cargo.toml
-│   ├── src
-│   └── tests
 ├── main.py
 ├── Makefile
 ├── pyproject.toml
@@ -24,28 +23,19 @@
 ├── scripts
 │   └── ctx.sh
 ├── tests
+│   ├── agent
 │   ├── cli
 │   ├── schemas
 │   └── utils
 └── utils
 
-17 directories, 10 files
+14 directories, 13 files
 
 ## Grep (gateway/portal/merkle/signature)
-gateway/src/pipeline.rs:34:    let sha = sha256_file(src)?;
-gateway/src/pipeline.rs:137:    let sig = core_client::sign_session(&ctx, &sess.session_id)?;
-gateway/src/pipeline.rs:192:        "signature": { "key_id": sig.kid, "algorithm": "Ed25519" },
-gateway/src/pipeline.rs:215:        "bundle_sha256": session.bundle_sha256,
-gateway/src/pipeline.rs:230:    // deterministic; in real-Core mode it reflects the current signing keys.
-gateway/src/pipeline.rs:303:    println!("attestation_path={} sha256={}", out_pdf.display(), sha);
-gateway/src/pipeline.rs:308:fn sha256_file(p: &Path) -> Result<String> {
-gateway/src/main.rs:9:use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-gateway/src/main.rs:106:    // Core session + sign + TL submit
-gateway/src/main.rs:108:    let _sig = core_client::sign_session(&ctx, &sess_resp.session_id)?;
-gateway/src/main.rs:416:                        "bundle_sha256": sess.bundle_sha256,
-gateway/src/main.rs:717:                println!("vault_loader_canonical_path={} sha256={}", out_path, digest);
-gateway/src/main.rs:759:                println!("IQOQ_canonical_path={} sha256={}", out_path, digest);
-gateway/src/main.rs:839:        let mut watcher: RecommendedWatcher = Watcher::new(tx, notify::Config::default())?;
+scripts/ctx.sh:33:  echo "## Grep (gateway/portal/merkle/signature)"
+scripts/ctx.sh:43:     -e '@router\.|FastAPI\(|Pydantic|Schema|type ' \
+scripts/ctx.sh:44:     -e 'Merkle|verify|sign|ed25519|sha256|reqwest|notify|Cargo\.toml' \
+main.py:2:app = FastAPI()
 docs/ADR-008-oord-seal-v1.md:17:- The reference CLI (`oord seal`, `oord verify`).
 docs/ADR-008-oord-seal-v1.md:18:- Agents/watchers that build and verify sealed bundles.
 docs/ADR-008-oord-seal-v1.md:32:- `key_id` — string; identifier of the Ed25519 key used to sign the manifest.
@@ -78,11 +68,25 @@ docs/ADR-008-oord-seal-v1.md:110:To make these contracts easy to use inside the 
 docs/ADR-008-oord-seal-v1.md:117:- `MerkleInfo`
 docs/ADR-008-oord-seal-v1.md:124:- Mirror the JSON Schema shapes.
 docs/ADR-008-oord-seal-v1.md:139:- Constructs example `SealManifest` and `TlProof` instances using Pydantic.
-Makefile:4:	cargo build --manifest-path gateway/Cargo.toml
-Makefile:10:	cargo test --manifest-path gateway/Cargo.toml
+_ai/agent-context-index.md:34:## Grep (gateway/portal/merkle/signature)
+tests/schemas/manifest_v1.json:14:    "signature"
+tests/schemas/manifest_v1.json:27:      "description": "Hash algorithm used for per-file digests and Merkle leaves"
+tests/schemas/manifest_v1.json:41:        "required": ["path", "sha256", "size_bytes"],
+tests/schemas/manifest_v1.json:48:          "sha256": { "type": "string" },
+tests/schemas/manifest_v1.json:53:    "signature": { "type": "string" },
+tests/schemas/proof_v1.json:31:        "signature": {
+tests/schemas/proof_v1.json:40:        "signature"
+agent/receiver.py:87:def verify_bundle_via_cli(cfg: AgentConfig, bundle_path: Path) -> Tuple[int, str, str]:
+agent/receiver.py:89:    Call the Oord CLI as a subprocess to verify a bundle.
+agent/receiver.py:97:        "verify",
+agent/receiver.py:146:            code, stdout, stderr = verify_bundle_via_cli(cfg, bundle_path)
 
 ## Recent Commits
+- 7b71de9 Make oord seal deterministic and tighten bundle layout
+- 6c2f506 CI: install pytest+pydantic directly, drop pip install .
+- 5f53daa CI: install oord-agent via pyproject and drop Rust build
+- 804b977 MVP-Phase1: Remove legacy gateway/Rust stack and finalize Python-only agent
 - e97dd12 chore: establish seal/proof contracts and passing test baseline
 
 ## Timestamp
-Generated: 2025-12-08 01:18:03Z (UTC)
+Generated: 2025-12-09 22:50:16Z (UTC)

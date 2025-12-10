@@ -37,6 +37,74 @@ def _canonical_json_bytes(obj: Any) -> bytes:
         ensure_ascii=False,
     ).encode("utf-8")
 
+def _compute_merkle_root_from_manifest_files(files: List[Dict[str, Any]]) -> str:
+    """
+    Compute Merkle root CID from manifest-style file entries:
+
+      { "path": "files/...", "sha256": "<64-hex>", "size_bytes": int }
+
+    using the same rules as oc/api/app/crypto/merkle.py.
+    """
+    entries: List[tuple[str, bytes]] = []
+
+    for fe in files:
+        if not isinstance(fe, dict):
+            raise ValueError("files entries must be objects")
+        path = fe.get("path")
+        h = fe.get("sha256")
+        if not isinstance(path, str) or not isinstance(h, str):
+            raise ValueError("files entries must provide 'path' and 'sha256' strings")
+        if not path.startswith("files/"):
+            raise ValueError("manifest file path must start with 'files/'")
+        if ".." in path or "\\" in path:
+            raise ValueError("manifest file path must not contain '..' or backslashes")
+        if len(h) != 64:
+            raise ValueError("sha256 must be 64 hex characters")
+        try:
+            digest = bytes.fromhex(h)
+        except ValueError:
+            raise ValueError("sha256 must be valid hex")
+        entries.append((path, digest))
+
+    if not entries:
+        raise ValueError("cannot compute Merkle root for empty file list")
+
+    entries.sort(key=lambda item: item[0])
+
+    level: List[bytes] = []
+    for _, digest in entries:
+        level.append(hashlib.sha256(b"leaf:" + digest).digest())
+
+    while len(level) > 1:
+        next_level: List[bytes] = []
+        i = 0
+        n = len(level)
+        while i < n:
+            left = level[i]
+            if i + 1 < n:
+                right = level[i + 1]
+                i += 2
+                node = hashlib.sha256(b"node:" + left + right).digest()
+            else:
+                i += 1
+                node = left
+            next_level.append(node)
+        level = next_level
+
+    root_hex = level[0].hex()
+    return "cid:sha256:" + root_hex
+
+def _manifest_unsigned_bytes(manifest: Dict[str, Any]) -> bytes:
+    """
+    Compute canonical bytes for the *unsigned* manifest view.
+
+    This strips the signature field (if present) and then applies the same
+    deterministic JSON encoding rules we use elsewhere. This is the payload
+    that Core will eventually sign with Ed25519.
+    """
+    unsigned = {k: v for k, v in manifest.items() if k != "signature"}
+    return _canonical_json_bytes(unsigned)
+
 
 def _collect_files_for_manifest(input_dir: Path) -> List[Dict[str, Any]]:
     """
@@ -189,6 +257,7 @@ def _build_bundle(
     """
     files_to_write: List[Tuple[str, bytes]] = []
 
+    # Bundle layout: manifest.json stores the *signed* manifest as canonical JSON.
     mbytes = _canonical_json_bytes(manifest)
     files_to_write.append(("manifest.json", mbytes))
 
@@ -508,6 +577,63 @@ def _verify_tl_signature(
 
     return True, None
 
+def _verify_manifest_signature(
+    manifest: Dict[str, Any],
+    jwks: Dict[str, Any],
+) -> Tuple[Optional[bool], Optional[str]]:
+    """
+    Verify SealManifest.signature using JWKS.
+
+    Returns:
+      (True, None)   -> signature verified OK
+      (False, err)   -> verification attempted and failed
+      (None, None)   -> verification not attempted (stub-kid, missing crypto, etc.)
+    """
+    if Ed25519PublicKey is None:
+        return None, None
+
+    key_id = manifest.get("key_id")
+    sig = manifest.get("signature")
+    if not isinstance(key_id, str) or not isinstance(sig, str):
+        return False, "manifest missing 'key_id' or 'signature'"
+
+    # Stub mode: Core used stub-kid + non-Ed25519 signature. We rely on hash checks only.
+    if key_id == "stub-kid":
+        return None, None
+
+    key = next((k for k in jwks.get("keys", []) if k.get("kid") == key_id), None)
+    if not key:
+        return False, f"manifest key_id {key_id!r} not found in JWKS"
+    if key.get("kty") != "OKP" or key.get("crv") != "Ed25519":
+        return False, "JWKS key for manifest is not an Ed25519 OKP key"
+
+    x_b64 = key.get("x")
+    if not x_b64:
+        return False, "JWKS key for manifest missing 'x' field"
+
+    try:
+        pub_bytes = urlsafe_b64decode(x_b64 + "===")
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"invalid JWKS x encoding for manifest key: {e!s}"
+
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(pub_bytes)
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"invalid Ed25519 public key bytes for manifest key: {e!s}"
+
+    unsigned = _manifest_unsigned_bytes(manifest)
+    try:
+        sig_bytes = urlsafe_b64decode(sig + "===")
+    except Exception as e:  # pragma: no cover - defensive
+        return False, f"invalid manifest signature encoding: {e!s}"
+
+    try:
+        pub.verify(sig_bytes, unsigned)
+    except Exception:
+        return False, "manifest signature verification failed"
+
+    return True, None
+
 
 def _online_tl_check(
     tl_url_base: str,
@@ -515,22 +641,39 @@ def _online_tl_check(
     merkle_root: str,
     sth_sig: Optional[str],
 ) -> Tuple[bool, Optional[str]]:
+    """
+    Online TL consistency check against Core /v1/tl/entries/{seq}.
+
+    We reuse _normalize_tl_fields so this tolerates both the current flat TL
+    entry shape and any nested entry/sth variants without hard-coding field
+    names here.
+    """
     base = tl_url_base.rstrip("/")
     url = f"{base}/v1/tl/entries/{seq}"
     try:
         obj = _http_json(url, method="GET", body=None, api_key=None, timeout_s=5.0)
-    except (urlerror.URLError, TimeoutError, RuntimeError, json.JSONDecodeError, ValueError) as e:
+    except (
+        urlerror.URLError,
+        TimeoutError,
+        RuntimeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as e:
         return False, f"TL online lookup failed: {e}"
 
+    # Allow either { entry: { ... } } or a flat entry object.
     entry = obj.get("entry") or obj
-    live_root = entry.get("merkle_root")
-    live_seq = entry.get("seq")
-    live_sth = entry.get("sth_sig")
+    live_root, live_seq, live_sth, _ = _normalize_tl_fields(entry)
+
+    if live_seq is None or live_root is None:
+        return False, "TL entry missing seq/merkle_root"
 
     if live_seq != seq or live_root != merkle_root:
         return False, f"TL mismatch (live seq={live_seq}, root={live_root})"
+
     if sth_sig and live_sth and live_sth != sth_sig:
         return False, "TL STH signature mismatch"
+
     return True, None
 
 
@@ -558,12 +701,19 @@ def verify_bundle(path: Path, tl_url: Optional[str] = None) -> Tuple[bool, Dict[
             "fingerprint": None,
             "error": None,
         },
+        "manifest_sig": {
+            "ok": None,
+            "key_id": None,
+            "sig_verified": None,
+            "error": None,
+        },
         "tl_online": {
             "enabled": bool(tl_url),
             "ok": None,
             "error": None,
         },
     }
+
 
     if not path.is_file():
         summary["error"] = "bundle path does not exist or is not a file"
@@ -579,38 +729,55 @@ def verify_bundle(path: Path, tl_url: Optional[str] = None) -> Tuple[bool, Dict[
             if not hashes_ok:
                 return False, summary
 
-            # TL proof
+            # TL proof (optional for now)
+            tl_obj: Optional[Dict[str, Any]] = None
             try:
                 tl_obj = _load_tl_proof(z)
             except RuntimeError as e:
-                summary["tl"]["present"] = False
-                summary["tl"]["ok"] = False
-                summary["tl"]["error"] = str(e)
-                if not summary.get("error"):
-                    summary["error"] = str(e)
-                return False, summary
+                msg = str(e)
+                # If tl_proof.json is simply missing, treat TL as "not present" but
+                # do not fail verification. This covers tl_mode=none bundles.
+                if "tl_proof.json missing from bundle" in msg:
+                    summary["tl"]["present"] = False
+                    summary["tl"]["ok"] = None
+                    summary["tl"]["error"] = msg
+                    tl_obj = None
+                else:
+                    # Any other TL error (bad JSON, wrong shape, etc.) is a hard failure.
+                    summary["tl"]["present"] = False
+                    summary["tl"]["ok"] = False
+                    summary["tl"]["error"] = msg
+                    if not summary.get("error"):
+                        summary["error"] = msg
+                    return False, summary
 
-            merkle_root, seq, sth_sig, signer_kid = _normalize_tl_fields(tl_obj)
-            if merkle_root is None or seq is None:
-                summary["tl"]["present"] = True
-                summary["tl"]["ok"] = False
-                summary["tl"]["error"] = "tl_proof.json missing merkle_root or seq"
-                return False, summary
+            merkle_root: Optional[str] = None
+            seq: Optional[int] = None
+            sth_sig: Optional[str] = None
+            signer_kid: Optional[str] = None
 
-            summary["tl"].update(
-                {
-                    "present": True,
-                    "ok": True,
-                    "seq": seq,
-                    "merkle_root": merkle_root,
-                    "sth_sig": sth_sig,
-                    "signer_kid": signer_kid,
-                    "sig_verified": None,
-                    "error": None,
-                }
-            )
+            if tl_obj is not None:
+                merkle_root, seq, sth_sig, signer_kid = _normalize_tl_fields(tl_obj)
+                if merkle_root is None or seq is None:
+                    summary["tl"]["present"] = True
+                    summary["tl"]["ok"] = False
+                    summary["tl"]["error"] = "tl_proof.json missing merkle_root or seq"
+                    return False, summary
 
-            # JWKS snapshot
+                summary["tl"].update(
+                    {
+                        "present": True,
+                        "ok": True,
+                        "seq": seq,
+                        "merkle_root": merkle_root,
+                        "sth_sig": sth_sig,
+                        "signer_kid": signer_kid,
+                        "sig_verified": None,
+                        "error": None,
+                    }
+                )
+
+            # JWKS snapshot (always required for signature verification)
             try:
                 jwks = _load_jwks(z)
             except RuntimeError as e:
@@ -637,23 +804,39 @@ def verify_bundle(path: Path, tl_url: Optional[str] = None) -> Tuple[bool, Dict[
                 }
             )
 
-            ok_sig, sig_err = _verify_tl_signature(
-                merkle_root=merkle_root,
-                seq=int(seq) if seq is not None else None,
-                sth_sig=sth_sig,
-                jwks=jwks,
-                signer_kid=signer_kid,
-            )
-            summary["tl"]["sig_verified"] = ok_sig
-            if ok_sig is False:
-                summary["tl"]["ok"] = False
-                summary["tl"]["error"] = sig_err or "TL signature verification failed"
-                if not summary.get("error"):
-                    summary["error"] = summary["tl"]["error"]
-                return False, summary
+            # Manifest signature verification (Ed25519 in live mode, stub ignored)
+            summary["manifest_sig"]["key_id"] = manifest.get("key_id")
+            ok_manifest_sig, ms_err = _verify_manifest_signature(manifest, jwks)
+            summary["manifest_sig"]["sig_verified"] = ok_manifest_sig
+            summary["manifest_sig"]["error"] = ms_err
 
-            # Optional online TL check
-            if tl_url and seq is not None and merkle_root is not None:
+            if ok_manifest_sig is False:
+                summary["manifest_sig"]["ok"] = False
+                if not summary.get("error"):
+                    summary["error"] = ms_err or "manifest signature verification failed"
+                return False, summary
+            else:
+                summary["manifest_sig"]["ok"] = ok_manifest_sig
+
+            # TL signature verification (only if TL proof present)
+            if tl_obj is not None and merkle_root is not None and seq is not None:
+                ok_sig, sig_err = _verify_tl_signature(
+                    merkle_root=merkle_root,
+                    seq=int(seq),
+                    sth_sig=sth_sig,
+                    jwks=jwks,
+                    signer_kid=signer_kid,
+                )
+                summary["tl"]["sig_verified"] = ok_sig
+                if ok_sig is False:
+                    summary["tl"]["ok"] = False
+                    summary["tl"]["error"] = sig_err or "TL signature verification failed"
+                    if not summary.get("error"):
+                        summary["error"] = summary["tl"]["error"]
+                    return False, summary
+
+            # Optional online TL check (only makes sense if TL proof exists)
+            if tl_url and tl_obj is not None and seq is not None and merkle_root is not None:
                 ok_online, err = _online_tl_check(tl_url, int(seq), merkle_root, sth_sig)
                 summary["tl_online"]["enabled"] = True
                 summary["tl_online"]["ok"] = ok_online
