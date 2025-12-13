@@ -509,6 +509,15 @@ def _load_jwks(z: zipfile.ZipFile) -> Dict[str, Any]:
         raise RuntimeError(f"jwks_snapshot.json is not valid JSON: {e}")
     if not isinstance(obj, dict):
         raise RuntimeError("jwks_snapshot.json must be a JSON object")
+    
+    keys = obj.get("keys")
+    # For verification, we require a proper JWKSet shape with at least one key.
+    # This mirrors the contract enforced by Core's /v1/jwks endpoint.
+    if not isinstance(keys, list) or not keys:
+        raise RuntimeError(
+            "jwks_snapshot.json must contain at least one key in 'keys[]'"
+        )
+
     return obj
 
 
@@ -712,6 +721,12 @@ def verify_bundle(path: Path, tl_url: Optional[str] = None) -> Tuple[bool, Dict[
             "ok": None,
             "error": None,
         },
+        "merkle": {
+            "ok": None,
+            "manifest_root": None,
+            "recomputed_root": None,
+            "error": None,
+        },
     }
 
 
@@ -728,6 +743,49 @@ def verify_bundle(path: Path, tl_url: Optional[str] = None) -> Tuple[bool, Dict[
             summary["hash_mismatches"] = mismatches
             if not hashes_ok:
                 return False, summary
+
+            # Merkle recomputation and consistency check:
+            #   - manifest.merkle.root_cid must exist and be a string
+            #   - recomputed Merkle from manifest.files must match it
+            merkle_info = manifest.get("merkle")
+            if not isinstance(merkle_info, dict):
+                summary["merkle"]["ok"] = False
+                summary["merkle"]["error"] = "manifest.merkle is missing or not an object"
+                summary["error"] = summary["merkle"]["error"]
+                return False, summary
+
+            manifest_root = merkle_info.get("root_cid")
+            if not isinstance(manifest_root, str):
+                summary["merkle"]["ok"] = False
+                summary["merkle"]["error"] = "manifest.merkle.root_cid is missing or not a string"
+                summary["error"] = summary["merkle"]["error"]
+                return False, summary
+
+            summary["merkle"]["manifest_root"] = manifest_root
+
+            try:
+                recomputed_root = _compute_merkle_root_from_manifest_files(
+                    manifest.get("files") or []
+                )
+            except ValueError as e:
+                summary["merkle"]["ok"] = False
+                summary["merkle"]["error"] = (
+                    f"failed to recompute Merkle root from manifest.files: {e}"
+                )
+                summary["error"] = summary["merkle"]["error"]
+                return False, summary
+
+            summary["merkle"]["recomputed_root"] = recomputed_root
+
+            if recomputed_root != manifest_root:
+                summary["merkle"]["ok"] = False
+                summary["merkle"]["error"] = (
+                    "recomputed Merkle root does not match manifest.merkle.root_cid"
+                )
+                summary["error"] = summary["merkle"]["error"]
+                return False, summary
+
+            summary["merkle"]["ok"] = True
 
             # TL proof (optional for now)
             tl_obj: Optional[Dict[str, Any]] = None
@@ -762,6 +820,18 @@ def verify_bundle(path: Path, tl_url: Optional[str] = None) -> Tuple[bool, Dict[
                     summary["tl"]["present"] = True
                     summary["tl"]["ok"] = False
                     summary["tl"]["error"] = "tl_proof.json missing merkle_root or seq"
+                    return False, summary
+
+                # TL merkle_root must match manifest.merkle.root_cid if present.
+                manifest_root_for_tl = summary["merkle"]["manifest_root"]
+                if isinstance(manifest_root_for_tl, str) and merkle_root != manifest_root_for_tl:
+                    summary["tl"]["present"] = True
+                    summary["tl"]["ok"] = False
+                    summary["tl"]["error"] = (
+                        "tl_proof merkle_root does not match manifest.merkle.root_cid"
+                    )
+                    if not summary.get("error"):
+                        summary["error"] = summary["tl"]["error"]
                     return False, summary
 
                 summary["tl"].update(
@@ -871,6 +941,16 @@ def _print_human(summary: Dict[str, Any], ok: bool) -> None:
         for m in summary.get("hash_mismatches", []):
             reason = m.get("reason", "mismatch")
             print(f"  - {reason}: {m}")
+
+    merkle = summary.get("merkle", {})
+    if merkle.get("manifest_root") or merkle.get("recomputed_root"):
+        print(
+            f"Merkle: {'OK' if merkle.get('ok') else 'FAIL'} "
+            f"(manifest={merkle.get('manifest_root') or '-'}, "
+            f"recomputed={merkle.get('recomputed_root') or '-'})"
+        )
+        if not merkle.get("ok") and merkle.get("error"):
+            print(f"  Merkle error: {merkle['error']}")
 
     tl = summary.get("tl", {})
     if tl.get("present"):

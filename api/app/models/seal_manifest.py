@@ -23,20 +23,20 @@ class MerkleInfo(BaseModel):
         description="Merkle tree algorithm identifier",
     )
 
-class TlSth(BaseModel):
-    tree_size: int
-    root_hash: str
-    timestamp_ms: int
-    key_id: str
-    signature: str
-
-
 class TlProof(BaseModel):
-    # Versioned proof contract so we can evolve fields later
-    proof_version: str = Field(default="1.0")
+    """
+    Canonical TL proof shape shared with:
+      - /v1/seal TL info (Core)
+      - schemas/proof_v1.json
+      - tl_proof.json in bundles
+    """
+    proof_version: str = "1.0"
     tl_seq: int
     merkle_root: str
-    sth: TlSth
+    sth_sig: str
+    t_log_ms: int
+    signer_key_id: Optional[str] = None
+
 
 class SealManifest(BaseModel):
     """
@@ -131,5 +131,4 @@ __all__ = [
     "MerkleInfo",
     "SealManifest",
     "TlProof",
-    "TlSth",
 ]

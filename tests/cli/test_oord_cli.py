@@ -8,7 +8,6 @@ import pytest
 
 from cli import oord_cli
 
-
 def _make_files(tmp_path: Path) -> Path:
     root = tmp_path / "in"
     (root / "sub").mkdir(parents=True, exist_ok=True)
@@ -35,6 +34,9 @@ def test_seal_and_verify_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         files: list[dict],
         tl_mode: str,
     ):
+        # Use the same Merkle computation as the real system so verify can
+        # recompute and compare against manifest.merkle.root_cid.
+        root_cid = oord_cli._compute_merkle_root_from_manifest_files(files)
         manifest = {
             "manifest_version": "1.0",
             "org_id": org_id,
@@ -43,7 +45,7 @@ def test_seal_and_verify_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             "key_id": "stub-kid",
             "hash_alg": "sha256",
             "merkle": {
-                "root_cid": "cid:sha256:" + "a" * 64,
+                "root_cid": root_cid,
                 "tree_alg": "binary_merkle_sha256",
             },
             "files": files,
@@ -51,11 +53,12 @@ def test_seal_and_verify_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         }
         tl_proof = {
             "tl_seq": 1,
-            "merkle_root": manifest["merkle"]["root_cid"],
+            "merkle_root": root_cid,
             "sth_sig": "stub-sth-sig",
             "signer_key_id": "stub-kid",
         }
         return manifest, tl_proof
+
 
     # Fake JWKS snapshot.
     def fake_jwks(base_url: str, api_key: str | None):
@@ -141,6 +144,7 @@ def test_verify_detects_hash_mismatch(tmp_path: Path, monkeypatch: pytest.Monkey
         files: list[dict],
         tl_mode: str,
     ):
+        root_cid = oord_cli._compute_merkle_root_from_manifest_files(files)
         manifest = {
             "manifest_version": "1.0",
             "org_id": org_id,
@@ -149,7 +153,7 @@ def test_verify_detects_hash_mismatch(tmp_path: Path, monkeypatch: pytest.Monkey
             "key_id": "stub-kid",
             "hash_alg": "sha256",
             "merkle": {
-                "root_cid": "cid:sha256:" + "a" * 64,
+                "root_cid": root_cid,
                 "tree_alg": "binary_merkle_sha256",
             },
             "files": files,
@@ -157,11 +161,12 @@ def test_verify_detects_hash_mismatch(tmp_path: Path, monkeypatch: pytest.Monkey
         }
         tl_proof = {
             "tl_seq": 1,
-            "merkle_root": manifest["merkle"]["root_cid"],
+            "merkle_root": root_cid,
             "sth_sig": "stub-sth-sig",
             "signer_key_id": "stub-kid",
         }
         return manifest, tl_proof
+
 
     def fake_jwks(base_url: str, api_key: str | None):
         return {
@@ -180,7 +185,7 @@ def test_verify_detects_hash_mismatch(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(oord_cli, "_seal_via_core", fake_seal)
     monkeypatch.setattr(oord_cli, "_fetch_jwks_snapshot", fake_jwks)
 
-        # Seal
+    # Seal
     with pytest.raises(SystemExit) as ei_seal:
         oord_cli.main(
             [
@@ -222,8 +227,8 @@ def test_build_bundle_is_deterministic(tmp_path: Path) -> None:
     input_dir = _make_files(tmp_path)
     out1 = tmp_path / "out1"
     out2 = tmp_path / "out2"
-
     files = oord_cli._collect_files_for_manifest(input_dir)
+    root_cid = oord_cli._compute_merkle_root_from_manifest_files(files)
 
     manifest = {
         "manifest_version": "1.0",
@@ -233,7 +238,7 @@ def test_build_bundle_is_deterministic(tmp_path: Path) -> None:
         "key_id": "stub-kid",
         "hash_alg": "sha256",
         "merkle": {
-            "root_cid": "cid:sha256:" + "a" * 64,
+            "root_cid": root_cid,
             "tree_alg": "binary_merkle_sha256",
         },
         "files": files,
@@ -284,3 +289,88 @@ def test_build_bundle_is_deterministic(tmp_path: Path) -> None:
         assert "files/a.txt" in names
         assert "files/sub/b.txt" in names
 
+
+def test_verify_detects_merkle_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    If manifest.merkle.root_cid is inconsistent with the Merkle computed from
+    manifest.files, verify should fail with a Merkle error and exit code 1.
+    """
+    input_dir = _make_files(tmp_path)
+    out_dir = tmp_path / "out"
+
+    def fake_seal(
+        base_url: str,
+        api_key: str | None,
+        org_id: str,
+        batch_id: str,
+        files: list[dict],
+        tl_mode: str,
+    ):
+        # Deliberately lie about the Merkle root while keeping files[]
+        # consistent. This should trip the Merkle recomputation logic.
+        wrong_root = "cid:sha256:" + "b" * 64
+        manifest = {
+            "manifest_version": "1.0",
+            "org_id": org_id,
+            "batch_id": batch_id,
+            "created_at_ms": 0,
+            "key_id": "stub-kid",
+            "hash_alg": "sha256",
+            "merkle": {
+                "root_cid": wrong_root,
+                "tree_alg": "binary_merkle_sha256",
+            },
+            "files": files,
+            "signature": "stub-signature",
+        }
+        tl_proof = {
+            "tl_seq": 1,
+            "merkle_root": wrong_root,
+            "sth_sig": "stub-sth-sig",
+            "signer_key_id": "stub-kid",
+        }
+        return manifest, tl_proof
+
+    def fake_jwks(base_url: str, api_key: str | None):
+        return {
+            "keys": [
+                {
+                    "kid": "stub-kid",
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "alg": "EdDSA",
+                    "use": "sig",
+                    "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(oord_cli, "_seal_via_core", fake_seal)
+    monkeypatch.setattr(oord_cli, "_fetch_jwks_snapshot", fake_jwks)
+
+    # Seal
+    with pytest.raises(SystemExit) as ei_seal:
+        oord_cli.main(
+            [
+                "seal",
+                "--input-dir",
+                str(input_dir),
+                "--out",
+                str(out_dir),
+            ]
+        )
+    assert ei_seal.value.code == 0
+
+    bundle_candidates = list(out_dir.glob("oord_bundle_*.zip"))
+    assert bundle_candidates, "expected sealed bundle in out_dir"
+    bundle_path = bundle_candidates[0]
+
+    # Verify should now fail with a Merkle mismatch
+    with pytest.raises(SystemExit) as ei_verify:
+        oord_cli.main(["verify", str(bundle_path)])
+    assert ei_verify.value.code == 1
+
+    ok, summary = oord_cli.verify_bundle(bundle_path)
+    assert ok is False
+    assert summary["merkle"]["ok"] is False
+    assert "recomputed Merkle root does not match" in (summary["merkle"]["error"] or "")

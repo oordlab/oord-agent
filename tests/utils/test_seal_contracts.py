@@ -1,8 +1,12 @@
 import json
 from pathlib import Path
 from cli import oord_cli
-
-from api.app.models.seal_manifest import FileEntry, MerkleInfo, SealManifest, TlProof, TlSth
+from api.app.models.seal_manifest import (
+    FileEntry,
+    MerkleInfo,
+    SealManifest,
+    TlProof,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -32,7 +36,7 @@ def test_proof_schema_file_exists_and_has_core_fields():
     assert schema_path.is_file(), "schemas/proof_v1.json missing"
 
     data = json.loads(schema_path.read_text())
-    for field in ["proof_version", "tl_seq", "merkle_root", "sth"]:
+    for field in ["proof_version", "tl_seq", "merkle_root", "sth_sig", "t_log_ms"]:
         assert field in data["properties"]
 
 
@@ -65,18 +69,18 @@ def test_pydantic_proof_roundtrip_example():
     proof = TlProof(
         tl_seq=42,
         merkle_root="cid:sha256:" + "c" * 64,
-        sth=TlSth(
-            tree_size=42,
-            root_hash="sha256:" + "d" * 64,
-            timestamp_ms=1764350123456,
-            key_id="tl-ed25519-1",
-            signature="dummy-sth-signature",
-        ),
+        sth_sig="dummy-sth-signature",
+        t_log_ms=1764350123456,
+        signer_key_id="dev-ed25519-1",
     )
 
     dumped = proof.model_dump()
     assert dumped["proof_version"] == "1.0"
-    assert dumped["sth"]["tree_size"] == 42
+    assert dumped["tl_seq"] == 42
+    assert dumped["merkle_root"].startswith("cid:sha256:")
+    assert dumped["sth_sig"] == "dummy-sth-signature"
+    assert dumped["t_log_ms"] == 1764350123456
+
 
 
 def test_manifest_unsigned_view_strips_signature_and_is_stable():

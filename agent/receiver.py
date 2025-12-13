@@ -1,6 +1,7 @@
 # agent/receiver.py
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -13,6 +14,13 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .config import AgentConfig
+
+def _log(msg: str) -> None:
+    """
+    Minimal human-readable logging for receiver events.
+    """
+    ts = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    print(f"[receiver] {ts} {msg}")
 
 
 @dataclass
@@ -131,6 +139,8 @@ def run_receiver_loop(cfg: AgentConfig, once: bool = False) -> None:
     quarantine_dir = cfg.receiver_paths.quarantine_dir
     state_path = cfg.receiver_paths.state_file
 
+    _log(f"starting receiver loop incoming_dir={incoming_dir} verified_root={verified_root} quarantine_dir={quarantine_dir} state_file={state_path}")
+
     state = load_state(state_path)
 
     while True:
@@ -142,11 +152,17 @@ def run_receiver_loop(cfg: AgentConfig, once: bool = False) -> None:
             now=now,
         )
 
+        if ready:
+            _log(f"found {len(ready)} ready bundle(s)")
+
         for bundle_path in ready:
+            _log(f"verifying bundle name={bundle_path.name} path={bundle_path}")
             code, stdout, stderr = verify_bundle_via_cli(cfg, bundle_path)
             if stdout:
+                # passthrough CLI stdout
                 print(stdout.strip())
             if stderr:
+                # passthrough CLI stderr
                 print(stderr.strip(), file=sys.stderr)
 
             name = bundle_path.name
@@ -154,6 +170,7 @@ def run_receiver_loop(cfg: AgentConfig, once: bool = False) -> None:
             if code == 0:
                 # verified; extract files and record state
                 _extract_verified_files(bundle_path, verified_root)
+                _log(f"bundle verified ok name={name} extracted_to={verified_root / bundle_path.stem}")
                 state.processed_bundles[name] = "verified"
                 save_state(state_path, state)
             elif code == 1:
@@ -161,10 +178,12 @@ def run_receiver_loop(cfg: AgentConfig, once: bool = False) -> None:
                 quarantine_dir.mkdir(parents=True, exist_ok=True)
                 target = quarantine_dir / name
                 os.replace(bundle_path, target)
+                _log(f"bundle verification failed name={name} moved_to_quarantine={target}")
                 state.processed_bundles[name] = "quarantined"
                 save_state(state_path, state)
             else:
                 # env/usage error (exit code 2 etc.) – leave bundle in place, do not mark state
+                _log(f"verify returned env/usage error for bundle name={name} exit_code={code}; leaving in place for retry")
                 continue
 
         if once:

@@ -1,6 +1,7 @@
 # agent/sender.py
 from __future__ import annotations
 
+import datetime
 import json
 import subprocess
 import sys
@@ -10,6 +11,13 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .config import AgentConfig
+
+def _log(msg: str) -> None:
+    """
+    Minimal human-readable logging for sender events.
+    """
+    ts = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    print(f"[sender] {ts} {msg}")
 
 
 @dataclass
@@ -110,6 +118,9 @@ def seal_batch_via_cli(
     Returns: (exit_code, stdout, stderr)
     """
     batch_id = _compute_batch_id(batch_dir, cfg.org.batch_prefix)
+    
+    _log(f"sealing batch name={batch_dir.name} batch_id={batch_id} input_dir={batch_dir} out_dir={out_dir}")
+
     cmd = [
         sys.executable,
         "-m",
@@ -142,6 +153,8 @@ def run_sender_loop(cfg: AgentConfig, once: bool = False) -> None:
     out_dir = cfg.sender_paths.out_dir
     state_path = cfg.sender_paths.state_file
 
+    _log(f"starting sender loop watch_dir={watch_dir} out_dir={out_dir} state_file={state_path}")
+
     state = load_state(state_path)
 
     while True:
@@ -153,20 +166,28 @@ def run_sender_loop(cfg: AgentConfig, once: bool = False) -> None:
             now=now,
         )
 
+        if ready_batches:
+            _log(f"found {len(ready_batches)} ready batch(es)")
+
         for batch_dir in ready_batches:
             code, stdout, stderr = seal_batch_via_cli(cfg, batch_dir, out_dir)
             if stdout:
+                # passthrough CLI stdout for now
                 print(stdout.strip())
             if stderr:
+                # passthrough CLI stderr for now
                 print(stderr.strip(), file=sys.stderr)
 
             name = batch_dir.name
             if code == 0:
+                _log(f"seal succeeded for batch name={name}")
                 state.processed_batches[name] = "sealed"
+                save_state(state_path, state)
             else:
-                # mark as failed; eligible for retry later if desired
-                state.processed_batches.setdefault(name, "failed")
-            save_state(state_path, state)
+                # treat non-zero exit as env/usage error: do NOT mark processed
+                # so the batch remains eligible for retry once the environment is fixed
+                _log(f"seal failed for batch name={name} exit_code={code}; leaving state unchanged for retry")
+
 
         if once:
             # Dev/one-shot mode: process whatever was ready and exit.

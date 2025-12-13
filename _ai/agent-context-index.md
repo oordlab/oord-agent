@@ -32,10 +32,36 @@
 14 directories, 13 files
 
 ## Grep (gateway/portal/merkle/signature)
+main.py:2:app = FastAPI()
 scripts/ctx.sh:33:  echo "## Grep (gateway/portal/merkle/signature)"
 scripts/ctx.sh:43:     -e '@router\.|FastAPI\(|Pydantic|Schema|type ' \
 scripts/ctx.sh:44:     -e 'Merkle|verify|sign|ed25519|sha256|reqwest|notify|Cargo\.toml' \
-main.py:2:app = FastAPI()
+api/app/models/seal_manifest.py:12:    sha256: str = Field(..., description="Hex-encoded SHA-256 digest of file contents")
+api/app/models/seal_manifest.py:16:class MerkleInfo(BaseModel):
+api/app/models/seal_manifest.py:19:        description="Content ID for Merkle root, e.g. 'cid:sha256:<hex>'",
+api/app/models/seal_manifest.py:21:    tree_alg: Literal["binary_merkle_sha256"] = Field(
+api/app/models/seal_manifest.py:22:        "binary_merkle_sha256",
+api/app/models/seal_manifest.py:23:        description="Merkle tree algorithm identifier",
+api/app/models/seal_manifest.py:38:    signer_key_id: Optional[str] = None
+api/app/models/seal_manifest.py:51:            key_id="org-DEMO-LABS-ed25519-1",
+api/app/models/seal_manifest.py:52:            merkle=MerkleInfo(...),
+api/app/models/seal_manifest.py:54:            signature="dummy-signature",
+api/app/models/seal_manifest.py:79:        description="Key ID used to sign this manifest, e.g. 'org-DEMO-LABS-ed25519-1'",
+api/app/models/seal_manifest.py:82:    hash_alg: Literal["sha256"] = Field(
+api/app/models/seal_manifest.py:83:        "sha256",
+api/app/models/seal_manifest.py:84:        description="Hash algorithm used for per-file digests and Merkle leaves",
+api/app/models/seal_manifest.py:87:    merkle: MerkleInfo = Field(
+api/app/models/seal_manifest.py:89:        description="Merkle tree summary for this batch",
+api/app/models/seal_manifest.py:97:    signature: str = Field(
+api/app/models/seal_manifest.py:99:        description="Detached signature over the canonical manifest payload",
+api/app/models/seal_manifest.py:102:    def unsigned_dict(self) -> dict:
+api/app/models/seal_manifest.py:104:        Return the manifest as a plain dict without the signature field.
+api/app/models/seal_manifest.py:106:        This is the view that is canonicalized and signed.
+api/app/models/seal_manifest.py:109:        data.pop("signature", None)
+api/app/models/seal_manifest.py:112:    def unsigned_bytes(self) -> bytes:
+api/app/models/seal_manifest.py:114:        Return JCS-style canonical bytes for the unsigned manifest view.
+api/app/models/seal_manifest.py:121:            self.unsigned_dict(),
+api/app/models/seal_manifest.py:131:    "MerkleInfo",
 docs/ADR-008-oord-seal-v1.md:17:- The reference CLI (`oord seal`, `oord verify`).
 docs/ADR-008-oord-seal-v1.md:18:- Agents/watchers that build and verify sealed bundles.
 docs/ADR-008-oord-seal-v1.md:32:- `key_id` — string; identifier of the Ed25519 key used to sign the manifest.
@@ -54,34 +80,9 @@ docs/ADR-008-oord-seal-v1.md:60:5. Verify the Ed25519 signature over the canonic
 docs/ADR-008-oord-seal-v1.md:61:6. Re-hash files, recompute Merkle root, and confirm it matches `merkle.root_cid`.
 docs/ADR-008-oord-seal-v1.md:65:- `hash_alg` must be `"sha256"` in v1.
 docs/ADR-008-oord-seal-v1.md:66:- `merkle.tree_alg` must be `"binary_merkle_sha256"` in v1.
-docs/ADR-008-oord-seal-v1.md:67:- `merkle.root_cid` must match the Merkle root computed from `files[*].sha256` in a deterministic order (exact ordering rules are defined in the agent/CLI/bundle ADR).
-docs/ADR-008-oord-seal-v1.md:68:- All `files[*].sha256` must be 64-char lowercase hex.
-docs/ADR-008-oord-seal-v1.md:73:`proof.json` provides an optional Transparency Log anchoring proof for a manifest’s Merkle root.
-docs/ADR-008-oord-seal-v1.md:79:- `merkle_root` — string; `"cid:sha256:<64hex>"`, must match `manifest.merkle.root_cid`.
-docs/ADR-008-oord-seal-v1.md:82:  - `root_hash` — string; `"sha256:<64hex>"` Merkle root of the TL tree.
-docs/ADR-008-oord-seal-v1.md:84:  - `key_id` — string; identifier of the Ed25519 key used to sign the STH.
-docs/ADR-008-oord-seal-v1.md:85:  - `signature` — string; URL-safe base64 (no padding) Ed25519 signature over the STH payload.
-docs/ADR-008-oord-seal-v1.md:93:## 4. JSON Schemas
-docs/ADR-008-oord-seal-v1.md:95:The following JSON Schemas are added under `oc/schemas/`:
-docs/ADR-008-oord-seal-v1.md:108:## 5. Pydantic Models
-docs/ADR-008-oord-seal-v1.md:110:To make these contracts easy to use inside the API service, we define Pydantic models under:
-docs/ADR-008-oord-seal-v1.md:117:- `MerkleInfo`
-docs/ADR-008-oord-seal-v1.md:124:- Mirror the JSON Schema shapes.
-docs/ADR-008-oord-seal-v1.md:139:- Constructs example `SealManifest` and `TlProof` instances using Pydantic.
-_ai/agent-context-index.md:34:## Grep (gateway/portal/merkle/signature)
-tests/schemas/manifest_v1.json:14:    "signature"
-tests/schemas/manifest_v1.json:27:      "description": "Hash algorithm used for per-file digests and Merkle leaves"
-tests/schemas/manifest_v1.json:41:        "required": ["path", "sha256", "size_bytes"],
-tests/schemas/manifest_v1.json:48:          "sha256": { "type": "string" },
-tests/schemas/manifest_v1.json:53:    "signature": { "type": "string" },
-tests/schemas/proof_v1.json:31:        "signature": {
-tests/schemas/proof_v1.json:40:        "signature"
-agent/receiver.py:87:def verify_bundle_via_cli(cfg: AgentConfig, bundle_path: Path) -> Tuple[int, str, str]:
-agent/receiver.py:89:    Call the Oord CLI as a subprocess to verify a bundle.
-agent/receiver.py:97:        "verify",
-agent/receiver.py:146:            code, stdout, stderr = verify_bundle_via_cli(cfg, bundle_path)
 
 ## Recent Commits
+- 137fc3a a bunch of stuff
 - 7b71de9 Make oord seal deterministic and tighten bundle layout
 - 6c2f506 CI: install pytest+pydantic directly, drop pip install .
 - 5f53daa CI: install oord-agent via pyproject and drop Rust build
@@ -89,4 +90,4 @@ agent/receiver.py:146:            code, stdout, stderr = verify_bundle_via_cli(c
 - e97dd12 chore: establish seal/proof contracts and passing test baseline
 
 ## Timestamp
-Generated: 2025-12-09 22:50:16Z (UTC)
+Generated: 2025-12-11 22:39:38Z (UTC)

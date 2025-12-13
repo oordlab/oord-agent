@@ -13,40 +13,23 @@
     "merkle_root": {
       "type": "string"
     },
-    "sth": {
-      "type": "object",
-      "properties": {
-        "tree_size": {
-          "type": "integer"
-        },
-        "root_hash": {
-          "type": "string"
-        },
-        "timestamp_ms": {
-          "type": "integer"
-        },
-        "key_id": {
-          "type": "string"
-        },
-        "signature": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "tree_size",
-        "root_hash",
-        "timestamp_ms",
-        "key_id",
-        "signature"
-      ],
-      "additionalProperties": false
+    "sth_sig": {
+      "type": "string"
+    },
+    "t_log_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "signer_key_id": {
+      "type": "string"
     }
   },
   "required": [
     "proof_version",
     "tl_seq",
     "merkle_root",
-    "sth"
+    "sth_sig",
+    "t_log_ms"
   ],
   "additionalProperties": false
 }
