@@ -41,7 +41,9 @@ def test_agent_entrypoint_sender(tmp_path):
     # Sanity: just assert process starts and logs agent_start
     proc = subprocess.run(
         [
-            "oord",
+            sys.executable,
+            "-m",
+            "cli.oord_cli",
             "agent",
             "--config",
             str(cfg),
